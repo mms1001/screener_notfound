@@ -284,9 +284,59 @@ def finalize_and_write_outputs(out_df: pd.DataFrame, output_path: str):
     master_path = parent / f"{base}_clean.csv"
     out_df.to_csv(master_path, index=False)
 
-    # candidates
-    out_df[out_df["Category A"]].to_csv(parent / "candidates_A.csv", index=False)
-    out_df[out_df["Category B"]].to_csv(parent / "candidates_B.csv", index=False)
+    # Candidate A column order
+    candidate_a_cols = [
+        "Ticket",
+        "Price Today",
+        "Today's Price Date",
+        "Price Peak (5Y)",
+        "Date Peak (5Y)",
+        "Bottom Price After Peak (5Y)",
+        "Bottom Date After Peak (5Y)",
+        "Drawdown From Peak (5Y) %",
+        "52W Low Price",
+        "52W Low Date",
+        "Return (90D) %",
+        "Market Cap",
+    ]
+
+    # Candidate B column order
+    candidate_b_cols = [
+        "Ticket",
+        "Price Today",
+        "Today's Price Date",
+        "52W Low Price",
+        "52W Low Date",
+        "Return (90D) %",
+        "Price Peak (5Y)",
+        "Date Peak (5Y)",
+        "Bottom Price After Peak (5Y)",
+        "Bottom Date After Peak (5Y)",
+        "Drawdown From Peak (5Y) %",
+        "Market Cap",
+    ]
+
+    # Filter candidates and reorder columns
+    candidates_a = out_df[out_df["Category A"]].copy()
+    candidates_b = out_df[out_df["Category B"]].copy()
+
+    # Drop Category A and Category B columns from candidate files
+    candidates_a = candidates_a.drop(columns=["Category A", "Category B"], errors="ignore")
+    candidates_b = candidates_b.drop(columns=["Category A", "Category B"], errors="ignore")
+
+    # Reorder columns (only include columns that exist)
+    candidates_a_cols_filtered = [c for c in candidate_a_cols if c in candidates_a.columns]
+    candidates_b_cols_filtered = [c for c in candidate_b_cols if c in candidates_b.columns]
+
+    # Add any remaining columns that weren't in the specified order
+    remaining_a = [c for c in candidates_a.columns if c not in candidates_a_cols_filtered]
+    remaining_b = [c for c in candidates_b.columns if c not in candidates_b_cols_filtered]
+
+    candidates_a = candidates_a[candidates_a_cols_filtered + remaining_a]
+    candidates_b = candidates_b[candidates_b_cols_filtered + remaining_b]
+
+    candidates_a.to_csv(parent / "candidates_A.csv", index=False)
+    candidates_b.to_csv(parent / "candidates_B.csv", index=False)
 
     print("✅ Clean master:", master_path)
     print("✅ Candidates A:", (out_df["Category A"].sum()))
