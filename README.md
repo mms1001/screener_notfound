@@ -302,5 +302,5 @@ pip install pandas numpy yfinance requests
 
 ## License
 
-This project is for personal/educational use.
+This project is for Oliver Mizne property. 
 
