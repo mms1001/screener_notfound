@@ -1,4 +1,4 @@
-# Cheap Rebound Scanner (Yahoo Finance)
+# Rebound Scanner 
 
 A local stock scanner that identifies stocks showing rebound patterns across multiple markets (US, Europe, Global, B3). The scanner identifies stocks that have rebounded significantly after major declines, helping to generate large candidate lists for further filtering.
 
@@ -72,10 +72,10 @@ python run_all_universes.py
 ```
 
 This will:
-1. ✅ Build/update universe files for US, Europe, Global, and B3
-2. ✅ Fetch/update price data for each universe
-3. ✅ Run screening for each universe
-4. ✅ Export category A, B, and C matches
+1. Build/update universe files for US, Europe, Global, and B3
+2. Fetch/update price data for each universe
+3. Run screening for each universe
+4. Export category A, B, and C matches
 
 ### Run Specific Universe
 
