@@ -15,6 +15,8 @@ import pandas as pd
 DEFAULT_WINDOW_5Y = 1260   # ~5y trading days
 DEFAULT_WINDOW_52W = 252   # ~52w trading days
 DEFAULT_WINDOW_90D = 63    # ~90 calendar days ≈ 63 trading days
+DEFAULT_WINDOW_180D = 180  # ~180 trading days
+DEFAULT_WINDOW_30D = 30    # ~30 trading days
 DEFAULT_REBOUND_PCT = 0.30
 DEFAULT_DRAWDOWN_PCT = 0.80
 
@@ -24,6 +26,8 @@ class ScreenConfig:
     window_5y: int = DEFAULT_WINDOW_5Y
     window_52w: int = DEFAULT_WINDOW_52W
     window_90d: int = DEFAULT_WINDOW_90D
+    window_180d: int = DEFAULT_WINDOW_180D
+    window_30d: int = DEFAULT_WINDOW_30D
     rebound_pct: float = DEFAULT_REBOUND_PCT
     drawdown_pct: float = DEFAULT_DRAWDOWN_PCT
 
@@ -48,7 +52,11 @@ def load_prices_csv(prices_path: Path) -> pd.DataFrame:
     # Ensure required column exists
     if "adj_close" not in df.columns:
         raise ValueError(f"Missing 'adj_close' in {prices_path.name}")
-    # Clean
+    # Force numeric conversion to handle dirty CSV data
+    df["adj_close"] = pd.to_numeric(df["adj_close"], errors="coerce")
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    # Clean - drop rows where date or adj_close is NaN
     df = df.dropna(subset=["date", "adj_close"])
     return df
 
@@ -107,8 +115,11 @@ def screen_ticker(prices: pd.DataFrame, cfg: ScreenConfig) -> dict:
             {
                 "price_today": np.nan,
                 "date_today": "",
+                "price_90d_ago": np.nan,
+                "return_90d": np.nan,
                 "qualifies_a": False,
                 "qualifies_b": False,
+                "qualifies_c": False,
                 "reason": "insufficient_data",
             }
         )
@@ -120,6 +131,53 @@ def screen_ticker(prices: pd.DataFrame, cfg: ScreenConfig) -> dict:
     date_today = pd.Timestamp(last_row["date"])
     out["price_today"] = price_today
     out["date_today"] = _fmt_date(date_today)
+
+    # Price guard 1: Global guard - if price_today is missing or <= 1.0, disqualify all
+    if pd.isna(price_today) or price_today <= 1.0:
+        out.update(
+            {
+                "price_90d_ago": np.nan,
+                "return_90d": np.nan,
+                "qualifies_a": False,
+                "qualifies_b": False,
+                "qualifies_c": False,
+                "reason": "price_today<=1",
+            }
+        )
+        # Set default fields to avoid missing columns
+        out.update(
+            {
+                "peak_5y_price": np.nan,
+                "peak_5y_date": "",
+                "bottom_post_peak_price": np.nan,
+                "bottom_post_peak_date": "",
+                "bottom_drawdown_pct": np.nan,
+                "hit30_from_bottom_date": "",
+                "days_bottom_to_hit30": np.nan,
+                "low_52w_price": np.nan,
+                "low_52w_date": "",
+                "hit30_from_52wlow_date": "",
+                "days_52wlow_to_hit30": np.nan,
+                "low180_price": np.nan,
+                "low180_date": "",
+                "spike30_threshold": np.nan,
+                "spike30_date": "",
+                "spike30_in_last30d": False,
+                "has_5y_history": False,
+                "has_52w_history": False,
+            }
+        )
+        return out
+
+    # Compute return_90d: price_today vs price ~90 trading days ago
+    price_90d_ago = np.nan
+    return_90d = np.nan
+    if len(prices) >= cfg.window_90d:
+        price_90d_ago = float(prices.iloc[-cfg.window_90d]["adj_close"])
+        if price_90d_ago > 0:
+            return_90d = (price_today / price_90d_ago) - 1
+    out["price_90d_ago"] = price_90d_ago
+    out["return_90d"] = return_90d
 
     # Rolling windows
     p5y = _last_n(prices, cfg.window_5y)
@@ -162,15 +220,19 @@ def screen_ticker(prices: pd.DataFrame, cfg: ScreenConfig) -> dict:
                 drawdown = 1.0 - (bottom_price / peak_price)
                 out["bottom_drawdown_pct"] = drawdown
 
-                if drawdown >= cfg.drawdown_pct and bottom_price > 0:
+                if bottom_price > 0:
                     target = (1.0 + cfg.rebound_pct) * bottom_price
                     hit_date = _first_crossing_date(p5y, bottom_date, target)
                     if hit_date is not None:
                         out["hit30_from_bottom_date"] = _fmt_date(hit_date)
                         out["days_bottom_to_hit30"] = int((hit_date - bottom_date).days)
 
-                        # "Recent" rule: the crossing must occur within the last 90d window
-                        qualifies_a = hit_date >= recent90.iloc[0]["date"]
+    # Category A: bottom_drawdown_pct >= drawdown_pct AND return_90d >= rebound_pct
+    if not pd.isna(out["bottom_drawdown_pct"]) and not pd.isna(return_90d):
+        qualifies_a = (
+            out["bottom_drawdown_pct"] >= cfg.drawdown_pct
+            and return_90d >= cfg.rebound_pct
+        )
 
     out["qualifies_a"] = bool(qualifies_a)
 
@@ -197,9 +259,70 @@ def screen_ticker(prices: pd.DataFrame, cfg: ScreenConfig) -> dict:
             if hit_date is not None:
                 out["hit30_from_52wlow_date"] = _fmt_date(hit_date)
                 out["days_52wlow_to_hit30"] = int((hit_date - low_date).days)
-                qualifies_b = hit_date >= recent90.iloc[0]["date"]
+
+    # Price guard 2: 52-week low guard - if low_52w_price is missing or <= 1.0, disqualify B and C
+    if pd.isna(out["low_52w_price"]) or out["low_52w_price"] <= 1.0:
+        qualifies_b = False
+        qualifies_c = False
+
+    # Category B: return_90d >= rebound_pct AND has_52w_history == True
+    if not pd.isna(return_90d) and not pd.isna(out["low_52w_price"]) and out["low_52w_price"] > 1.0:
+        qualifies_b = (
+            return_90d >= cfg.rebound_pct
+            and out["has_52w_history"] == True
+        )
 
     out["qualifies_b"] = bool(qualifies_b)
+
+    # ---- Category C ----
+    # Initialize qualifies_c based on 52-week guard (already set above if guard failed)
+    # If 52-week guard passed, we'll compute Category C below
+    qualifies_c = False
+    spike30_in_last30d = False
+
+    out.update(
+        {
+            "low180_price": np.nan,
+            "low180_date": "",
+            "spike30_threshold": np.nan,
+            "spike30_date": "",
+            "spike30_in_last30d": False,
+        }
+    )
+
+    # Only compute Category C if 52-week guard passed (low_52w_price > 1.0)
+    if not pd.isna(out["low_52w_price"]) and out["low_52w_price"] > 1.0:
+        if len(prices) >= cfg.window_180d:
+            recent180 = _last_n(prices, cfg.window_180d)
+            
+            # Compute 52-week low within recent180
+            low180_price = float(recent180["adj_close"].min())
+            low180_idx = recent180["adj_close"].idxmin()
+            low180_date = pd.Timestamp(recent180.loc[low180_idx, "date"])
+            out["low180_price"] = low180_price
+            out["low180_date"] = _fmt_date(low180_date)
+
+            # Price guard 3: 180-day low guard - if low180_price is missing or <= 1.0, disqualify C
+            if not pd.isna(low180_price) and low180_price > 1.0:
+                threshold = 1.3 * low180_price
+                out["spike30_threshold"] = threshold
+
+                # Check if price touched >= threshold after low180_date
+                after_low = recent180[recent180["date"] >= low180_date]
+                touched = after_low["adj_close"] >= threshold
+                qualifies_c = touched.any()
+
+                if qualifies_c:
+                    spike_idx = after_low.loc[touched].index.min()
+                    spike_date = pd.Timestamp(after_low.loc[spike_idx, "date"])
+                    out["spike30_date"] = _fmt_date(spike_date)
+
+                    # Check if spike occurred in last 30 days
+                    recent30 = _last_n(prices, cfg.window_30d)
+                    spike30_in_last30d = (recent30["adj_close"] >= threshold).any()
+                    out["spike30_in_last30d"] = bool(spike30_in_last30d)
+
+    out["qualifies_c"] = bool(qualifies_c)
 
     # ---- Optional extras (useful for 3rd filter) ----
     # Avg volume 30d (if volume exists)
@@ -212,7 +335,10 @@ def screen_ticker(prices: pd.DataFrame, cfg: ScreenConfig) -> dict:
     # Volatility 90d (stdev of daily log returns using adj_close)
     if len(recent90) >= 20:
         ac = recent90["adj_close"].astype(float)
-        rets = np.log(ac / ac.shift(1)).dropna()
+        ac = ac[ac > 0]  # keep only positive prices
+        ratio = ac / ac.shift(1)
+        ratio = ratio[ratio > 0]
+        rets = np.log(ratio).dropna()
         out["volatility_90d"] = float(rets.std(ddof=0)) if len(rets) else np.nan
     else:
         out["volatility_90d"] = np.nan
@@ -229,7 +355,13 @@ def run_screen(
     cfg: ScreenConfig,
     limit: Optional[int] = None,
 ) -> pd.DataFrame:
-    tickers = load_universe(universe_csv)
+    # Load universe CSV and create title mapping
+    df_universe = pd.read_csv(universe_csv)
+    if "ticker" not in df_universe.columns:
+        raise ValueError("Universe CSV must contain a 'ticker' column.")
+    title_map = dict(zip(df_universe["ticker"], df_universe.get("title", ""))) if "title" in df_universe.columns else {}
+    
+    tickers = sorted(df_universe["ticker"].dropna().unique().tolist())
     if limit:
         tickers = tickers[:limit]
 
@@ -243,10 +375,14 @@ def run_screen(
                 {
                     "run_id": run_id,
                     "ticker": t,
+                    "ticker_name": title_map.get(t, ""),
                     "price_today": np.nan,
                     "date_today": "",
+                    "price_90d_ago": np.nan,
+                    "return_90d": np.nan,
                     "qualifies_a": False,
                     "qualifies_b": False,
+                    "qualifies_c": False,
                     "reason": "missing_price_file",
                 }
             )
@@ -257,16 +393,21 @@ def run_screen(
             result = screen_ticker(prices, cfg)
             result["run_id"] = run_id
             result["ticker"] = t
+            result["ticker_name"] = title_map.get(t, "")
             rows.append(result)
         except Exception as e:
             rows.append(
                 {
                     "run_id": run_id,
                     "ticker": t,
+                    "ticker_name": title_map.get(t, ""),
                     "price_today": np.nan,
                     "date_today": "",
+                    "price_90d_ago": np.nan,
+                    "return_90d": np.nan,
                     "qualifies_a": False,
                     "qualifies_b": False,
+                    "qualifies_c": False,
                     "reason": f"error:{type(e).__name__}",
                 }
             )
@@ -280,10 +421,14 @@ def run_screen(
     preferred_cols = [
         "run_id",
         "ticker",
+        "ticker_name",
         "date_today",
         "price_today",
+        "price_90d_ago",
+        "return_90d",
         "qualifies_a",
         "qualifies_b",
+        "qualifies_c",
         # A
         "peak_5y_date",
         "peak_5y_price",
@@ -297,6 +442,12 @@ def run_screen(
         "low_52w_price",
         "hit30_from_52wlow_date",
         "days_52wlow_to_hit30",
+        # C
+        "low180_date",
+        "low180_price",
+        "spike30_threshold",
+        "spike30_date",
+        "spike30_in_last30d",
         # extras
         "avg_volume_30d",
         "volatility_90d",
@@ -306,12 +457,14 @@ def run_screen(
     ]
     for c in preferred_cols:
         if c not in df_out.columns:
-            df_out[c] = np.nan if c not in ("run_id", "ticker", "date_today", "reason") else ""
+            if c in ("run_id", "ticker", "ticker_name", "date_today", "reason", "low180_date", "spike30_date"):
+                df_out[c] = ""
+            elif c in ("qualifies_a", "qualifies_b", "qualifies_c", "spike30_in_last30d"):
+                df_out[c] = False
+            else:
+                df_out[c] = np.nan
 
     df_out = df_out[preferred_cols].copy()
-
-    MIN_PRICE = 10.0
-    df_out = df_out[df_out["price_today"] >= MIN_PRICE]
 
     # Formatting for human readability
     price_cols = [
@@ -320,22 +473,26 @@ def run_screen(
         "peak_5y_price",
         "bottom_post_peak_price",
         "low_52w_price",
+        "low180_price",
+        "spike30_threshold",
     ]
 
+    # Keep prices as numeric floats (rounding applied in export_candidates.py)
     for c in price_cols:
         if c in df_out.columns:
-            df_out[c] = df_out[c].astype(float).round(2)
+            df_out[c] = pd.to_numeric(df_out[c], errors="coerce")
 
-    pct_cols = [
-        "return_90d",
-        "bottom_drawdown_pct",
-        "rebound_from_bottom",
-        "rebound_from_52wlow",
-    ]
-
-    for c in pct_cols:
+    # Keep percentage columns as raw decimals (formatting applied in export_candidates.py)
+    # No multiplication by 100 here - keep return_90d and bottom_drawdown_pct as decimals (0.30, 0.80)
+    for c in ["return_90d", "bottom_drawdown_pct"]:
         if c in df_out.columns:
-            df_out[c] = (df_out[c].astype(float) * 100).round(1)
+            df_out[c] = pd.to_numeric(df_out[c], errors="coerce")
+
+    # Ensure numeric types for volume and volatility
+    if "avg_volume_30d" in df_out.columns:
+        df_out["avg_volume_30d"] = pd.to_numeric(df_out["avg_volume_30d"], errors="coerce")
+    if "volatility_90d" in df_out.columns:
+        df_out["volatility_90d"] = pd.to_numeric(df_out["volatility_90d"], errors="coerce")
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     df_out.to_csv(output_csv, index=False)

@@ -90,7 +90,8 @@ def main():
     # 1) Build universe
     cmd_universe = [
         "python",
-        "src/universe.py",
+        "-m",
+        "src.universe",
         "--input",
         *args.universe_input,
         "--output",
@@ -106,7 +107,8 @@ def main():
     # 2) Fetch/update prices
     cmd_fetch = [
         "python",
-        "src/fetch_prices.py",
+        "-m",
+        "src.fetch_prices",
         "--universe",
         str(universe_output),
         "--prices-dir",
@@ -122,7 +124,8 @@ def main():
     # 3) Screen
     cmd_screen = [
         "python",
-        "src/screen.py",
+        "-m",
+        "src.screen",
         "--universe",
         str(universe_output),
         "--prices-dir",

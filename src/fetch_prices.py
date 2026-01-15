@@ -8,6 +8,15 @@ from pathlib import Path
 import pandas as pd
 import yfinance as yf
 
+# Import currency fetching - handle both relative and absolute imports
+try:
+    from .meta import _fetch_currency_from_yfinance
+except ImportError:
+    # Fallback for when run as script
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from src.meta import _fetch_currency_from_yfinance
+
 
 PRICE_COLS = [
     "Open",
@@ -59,6 +68,36 @@ def _download_prices(ticker: str, start: datetime) -> pd.DataFrame:
     df = df[PRICE_COLS].rename(columns=OUTPUT_COLS)
     df = df.reset_index().rename(columns={"Date": "date"})
     df["date"] = pd.to_datetime(df["date"])
+    
+    # Get currency and handle GBp scaling
+    currency = _fetch_currency_from_yfinance(ticker)
+    currency_upper = currency.upper() if currency else None
+    
+    # Check if currency is GBp (pence) - either explicitly "GBp" or "GBP" with pence-range prices
+    is_gbp = currency_upper == "GBP"
+    is_gbp_pence = (currency and len(currency) == 3 and 
+                    currency[:2].upper() == "GB" and currency[2].lower() == 'p')
+    
+    if is_gbp or is_gbp_pence:
+        # Check if prices are in pence range (typically > 10 for pence, < 10 for GBP)
+        # If average price is > 10, likely in pence (GBp), scale down
+        price_cols = ["open", "high", "low", "close", "adj_close"]
+        available_prices = [df[col].dropna() for col in price_cols if col in df.columns]
+        if available_prices:
+            avg_price = pd.concat(available_prices).mean()
+            # If explicitly GBp or average price > 10, scale to GBP
+            if is_gbp_pence or avg_price > 10.0:
+                for col in price_cols:
+                    if col in df.columns:
+                        df[col] = df[col] / 100.0
+                print(f"  Scaling GBp -> GBP for {ticker}")
+                # Update currency to GBP after scaling
+                currency = "GBP"
+    
+    # Optionally add currency column
+    if currency:
+        df["currency"] = currency
+    
     return df
 
 
