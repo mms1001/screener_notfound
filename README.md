@@ -27,7 +27,7 @@ The goal is to generate a **large list (thousands)** of candidates to feed into 
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.13.3
 - Virtual environment (recommended)
 
 ### Setup
