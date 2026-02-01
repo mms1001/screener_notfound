@@ -14,6 +14,9 @@ jobs:
   run-screener:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    env:
+      # Helps yfinance reliability on cloud runners (reduces NaNs/empty market caps)
+      YF_USE_CURL_CFFI: "1"
 
     steps:
       - name: Checkout
@@ -29,29 +32,114 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build US universe (required for global)
+      - name: Install curl_cffi for yfinance reliability
+        run: |
+          pip install -U curl_cffi
+
+      # -----------------------
+      # Build universes (US -> Europe -> B3 -> Global)
+      # -----------------------
+
+      - name: Build US universe
         run: |
           mkdir -p data/results logs
           python run_all_universes.py --universe us | tee logs/run_us.log
 
+      - name: Sanity check US filtered universe size
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          p = Path("data/universe_us_filtered.csv")
+          if not p.exists():
+              raise SystemExit("Missing data/universe_us_filtered.csv")
+
+          df = pd.read_csv(p)
+          n = len(df)
+          print("US filtered rows:", n)
+          if n < 50:
+              raise SystemExit("US filtered universe is too small (<50). Aborting to avoid empty global run.")
+          PY
+
+      - name: Build Europe universe
+        run: |
+          mkdir -p data/results logs
+          python run_all_universes.py --universe europe | tee logs/run_europe.log
+
+      - name: Sanity check Europe filtered universe size
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          p = Path("data/universe_europe_filtered.csv")
+          if not p.exists():
+              raise SystemExit("Missing data/universe_europe_filtered.csv")
+
+          df = pd.read_csv(p)
+          n = len(df)
+          print("Europe filtered rows:", n)
+          if n < 20:
+              raise SystemExit("Europe filtered universe is too small (<20). Aborting to avoid incomplete global.")
+          PY
+
+      - name: Build B3 universe
+        run: |
+          mkdir -p data/results logs
+          python run_all_universes.py --universe b3 | tee logs/run_b3.log
+
+      - name: Sanity check B3 filtered universe size
+        run: |
+          python - << 'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          p = Path("data/universe_b3_filtered.csv")
+          if not p.exists():
+              raise SystemExit("Missing data/universe_b3_filtered.csv")
+
+          df = pd.read_csv(p)
+          n = len(df)
+          print("B3 filtered rows:", n)
+          if n < 20:
+              raise SystemExit("B3 filtered universe is too small (<20). Aborting to avoid incomplete global.")
+          PY
+
       - name: Run global universe pipeline
         run: |
+          mkdir -p data/results logs
           LIMIT="${{ github.event.inputs.limit }}"
           if [ -n "$LIMIT" ]; then
-            python run_all_universes.py --universe global --limit "$LIMIT" | tee logs/run.log
+            python run_all_universes.py --universe global --limit "$LIMIT" | tee logs/run_global.log
           else
-            python run_all_universes.py --universe global | tee logs/run.log
+            python run_all_universes.py --universe global | tee logs/run_global.log
           fi
 
-
-      - name: Email candidates A/B/C
+      # -----------------------
+      # Email results (only if candidates exist)
+      # -----------------------
+      - name: Email candidates (if present)
         env:
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
         run: |
-          python scripts/email_candidates.py || true
+          set -e
+          echo "Checking for candidate CSVs..."
+          COUNT=$(find data/results -type f -name "candidates_*.csv" -size +0c | wc -l | tr -d ' ')
+          echo "Found $COUNT candidate CSV(s)."
 
+          if [ "$COUNT" -gt 0 ]; then
+            python scripts/email_candidates.py
+          else
+            echo "No candidate files found; skipping email."
+          fi
+        continue-on-error: true
+
+      # -----------------------
+      # Upload artifacts
+      # -----------------------
       - name: Upload candidates + logs as artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -60,7 +148,7 @@ jobs:
             data/results/**/candidates_*.csv
             data/results/**/candidates_*.xlsx
             data/results/**/screen_run_*.csv
-            data/universe/**
-            logs/run.log
-            logs/run_us.log
+            data/universe*.csv
+            data/universe/**/*
+            logs/*.log
           if-no-files-found: warn
