@@ -40,14 +40,13 @@ jobs:
           fi
 
       - name: Email candidates A/B/C
-        if: ${{ secrets.EMAIL_SENDER != '' && secrets.EMAIL_PASSWORD != '' && secrets.EMAIL_RECIPIENT != '' }}
         env:
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
         run: |
-          python scripts/email_candidates.py
-
+          python scripts/email_candidates.py || true
+     
       - name: Upload candidates + logs as artifacts
         uses: actions/upload-artifact@v4
         with:
