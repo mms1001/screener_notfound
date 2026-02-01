@@ -1,10 +1,13 @@
 name: Monthly Global Screener (A/B/C)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Optional limit for testing (blank = full run)"
+        required: false
+        default: ""
   schedule:
-    # Runs 1st day of every month at 12:10 UTC
-    # (UTC is used by GitHub Actions; this is ~7:10am New York during standard time)
     - cron: "10 12 1 * *"
 
 jobs:
@@ -27,19 +30,23 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run global universe pipeline
-        env:
-          # Optional: if your universe builder needs a SEC user agent, you can set one here
-          # SEC_USER_AGENT: "yourapp (email@example.com)"
-          #
-          # If you want a quick test at first, set LIMIT and pass it in
-          LIMIT: ""
         run: |
           mkdir -p data/results logs
+          LIMIT="${{ github.event.inputs.limit }}"
           if [ -n "$LIMIT" ]; then
             python run_all_universes.py --universe global --limit "$LIMIT" | tee logs/run.log
           else
             python run_all_universes.py --universe global | tee logs/run.log
           fi
+
+      - name: Email candidates A/B/C
+        if: ${{ secrets.EMAIL_SENDER != '' && secrets.EMAIL_PASSWORD != '' && secrets.EMAIL_RECIPIENT != '' }}
+        env:
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
+        run: |
+          python scripts/email_candidates.py
 
       - name: Upload candidates + logs as artifacts
         uses: actions/upload-artifact@v4
@@ -49,5 +56,6 @@ jobs:
             data/results/**/candidates_*.csv
             data/results/**/candidates_*.xlsx
             data/results/**/screen_run_*.csv
+            data/universe/**
             logs/run.log
           if-no-files-found: warn
