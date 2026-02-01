@@ -29,15 +29,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run global universe pipeline
+      - name: Build US universe (required for global)
         run: |
           mkdir -p data/results logs
+          python run_all_universes.py --universe us | tee logs/run_us.log
+
+      - name: Run global universe pipeline
+        run: |
           LIMIT="${{ github.event.inputs.limit }}"
           if [ -n "$LIMIT" ]; then
             python run_all_universes.py --universe global --limit "$LIMIT" | tee logs/run.log
           else
             python run_all_universes.py --universe global | tee logs/run.log
           fi
+
 
       - name: Email candidates A/B/C
         env:
@@ -46,7 +51,7 @@ jobs:
           EMAIL_RECIPIENT: ${{ secrets.EMAIL_RECIPIENT }}
         run: |
           python scripts/email_candidates.py || true
-     
+
       - name: Upload candidates + logs as artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -57,4 +62,5 @@ jobs:
             data/results/**/screen_run_*.csv
             data/universe/**
             logs/run.log
+            logs/run_us.log
           if-no-files-found: warn
