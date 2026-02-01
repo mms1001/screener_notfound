@@ -1,4 +1,6 @@
+# =====================
 # Python
+# =====================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -20,27 +22,41 @@ wheels/
 .installed.cfg
 *.egg
 
+# =====================
 # Virtual environments
+# =====================
 venv/
 env/
 ENV/
 .venv
 
+# =====================
 # IDE
+# =====================
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# =====================
 # Generated data (do NOT commit)
-data/
+# =====================
+data/results/
+data/prices/
+data/universe/
 logs/
 
+# BUT keep the global universe seed file
+!data/universe_global.csv
+
+# =====================
 # OS
+# =====================
 .DS_Store
 Thumbs.db
 
+# =====================
 # Logs
+# =====================
 *.log
-
