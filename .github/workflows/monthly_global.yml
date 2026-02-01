@@ -1,0 +1,53 @@
+name: Monthly Global Screener (A/B/C)
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Runs 1st day of every month at 12:10 UTC
+    # (UTC is used by GitHub Actions; this is ~7:10am New York during standard time)
+    - cron: "10 12 1 * *"
+
+jobs:
+  run-screener:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run global universe pipeline
+        env:
+          # Optional: if your universe builder needs a SEC user agent, you can set one here
+          # SEC_USER_AGENT: "yourapp (email@example.com)"
+          #
+          # If you want a quick test at first, set LIMIT and pass it in
+          LIMIT: ""
+        run: |
+          mkdir -p data/results logs
+          if [ -n "$LIMIT" ]; then
+            python run_all_universes.py --universe global --limit "$LIMIT" | tee logs/run.log
+          else
+            python run_all_universes.py --universe global | tee logs/run.log
+          fi
+
+      - name: Upload candidates + logs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidates-and-logs
+          path: |
+            data/results/**/candidates_*.csv
+            data/results/**/candidates_*.xlsx
+            data/results/**/screen_run_*.csv
+            logs/run.log
+          if-no-files-found: warn
