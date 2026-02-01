@@ -33,15 +33,9 @@ ENV/
 *.swo
 *~
 
-# Data files (large CSV files)
-data/prices/*.csv
-data/results/*.csv
-data/universe/*.csv
-
-# Keep directory structure but ignore contents
-!data/prices/.gitkeep
-!data/results/.gitkeep
-!data/universe/.gitkeep
+# Generated data (do NOT commit)
+data/
+logs/
 
 # OS
 .DS_Store
